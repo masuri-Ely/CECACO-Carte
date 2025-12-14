@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Carte Interactive — CECACO</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
+  <style>
+    body { margin:0; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; }
+    #map { height: calc(100vh - 88px); width: 100%; }
+    header { padding:12px 0; background: #f7f9fc; }
+    h1 { text-align:center; margin:0; font-size:1.6rem; font-weight:700; color:#1e4fa3; }
+    .panel { position:absolute; z-index:1000; background:white; padding:10px; border-radius:8px; box-shadow:0 6px 18px rgba(0,0,0,0.08); }
+    .small { font-size:0.9rem }
+    .hidden { display:none !important }
+    pre { background:#0b1220; color:#e6eef8; padding:10px; border-radius:6px; overflow:auto; max-height:300px; }
+    @media (max-width:640px){ #layerPanel{ left:8px; width:90%; } #adminPanel{ left:8px; width:90%; } }
+    .btn { display:inline-block; padding:6px 10px; border-radius:6px; cursor:pointer; }
+  </style>
+</head>
+<body>
+  <header class="border-b flex justify-between items-center px-4">
+    <h1>CECACO — Carte interactive (Backend mode)</h1>
+    <button id="adminToggle" class="bg-gray-800 text-white px-3 py-1 rounded">Admin</button>
+  </header>
+
+  <div id="map"></div>
+
+  <!-- Admin panel (top-right) -->
+  <div id="adminPanel" class="panel" style="top:76px; right:12px; width:420px;">
+    <div id="loginForm">
+      <label class="block text-sm font-medium mb-2">Connexion Admin (via backend)</label>
+      <input id="adminUser" class="w-full border rounded px-2 py-1 mb-2" placeholder="Utilisateur" value="admin" />
+      <input id="adminPass" type="password" class="w-full border rounded px-2 py-1 mb-2" placeholder="Mot de passe" />
+      <div class="flex gap-2">
+        <button id="loginBtn" class="flex-1 bg-blue-600 text-white rounded py-1">Se connecter</button>
+        <button id="logoutBtn" class="flex-1 bg-gray-200 rounded py-1 hidden">Déconnexion</button>
+      </div>
+    </div>
+
+    <div id="adminTools" class="mt-4 hidden">
+      <label class="block small mb-1">Mode backend</label>
+      <div class="flex items-center gap-2 mb-2">
+        <input type="checkbox" id="useMock" /> <label for="useMock" class="text-sm">Utiliser backend local (mode déconnecté)</label>
+      </div>
+
+      <label class="block small mb-1">Importer des couches</label>
+      <div class="space-y-2">
+        <button id="geojsonBtn" class="w-full bg-green-600 text-white rounded py-1">📄 Importer GeoJSON</button>
+        <input type="file" id="geojsonInput" accept=".geojson,.json" class="hidden" />
+
+        <button id="shpBtn" class="w-full bg-blue-600 text-white rounded py-1">📂 Importer SHP (zip)</button>
+        <input type="file" id="shpZipInput" accept=".zip" class="hidden" />
+
+        <button id="kmlBtn" class="w-full bg-purple-600 text-white rounded py-1">🗺️ Importer KML</button>
+        <input type="file" id="kmlInput" accept=".kml" class="hidden" />
+
+        <button id="gpxBtn" class="w-full bg-yellow-600 text-white rounded py-1">🧭 Importer GPX</button>
+        <input type="file" id="gpxInput" accept=".gpx" class="hidden" />
+
+        <button id="dxfBtn" class="w-full bg-red-600 text-white rounded py-1">📐 Importer DXF</button>
+        <input type="file" id="dxfInput" accept=".dxf" class="hidden" />
+      </div>
+
+      <div class="flex gap-2 mt-3">
+        <button id="measureBtn" class="flex-1 bg-indigo-600 text-white rounded py-1">📏 Mesurer</button>
+        <button id="drawBtn" class="flex-1 bg-indigo-400 text-white rounded py-1">✏️ Dessiner</button>
+      </div>
+
+      <div class="flex gap-2 mt-2">
+        <button id="clearLayersBtn" class="flex-1 bg-red-600 text-white rounded py-1">Supprimer toutes</button>
+        <button id="saveBtn" class="flex-1 bg-green-700 text-white rounded py-1">Sauvegarder (local)</button>
+      </div>
+
+      <div class="flex gap-2 mt-2">
+        <button id="pushBtn" class="flex-1 bg-gray-700 text-white rounded py-1">Envoyer au serveur</button>
+        <button id="shareBtn" class="flex-1 bg-blue-800 text-white rounded py-1">Partager (public)</button>
+      </div>
+
+      <label class="block small mt-3">Backend URL</label>
+      <input id="backendUrl" class="w-full border rounded px-2 py-1 mt-1" placeholder="https://mon-backend.example/api" value="http://localhost:3000/api" />
+      <p class="text-xs text-gray-500 mt-2">Si l'API renvoie "Failed to fetch", active <b>Utiliser backend local</b> pour travailler hors-ligne (mock).</p>
+    </div>
+  </div>
+
+  <!-- Layer panel -->
+  <div id="layerPanel" class="panel hidden" style="top:220px; left:12px; width:420px; max-height:65vh; overflow:auto;">
+    <div class="flex items-center justify-between mb-2">
+      <h3 class="font-semibold">Couches chargées</h3>
+      <div>
+        <label class="text-xs mr-2">Fond</label>
+        <select id="basemapSelect" class="border rounded px-2 py-1 text-sm">
+          <option value="osm">OpenStreetMap</option>
+          <option value="gSat">Google Satellite</option>
+          <option value="gHybrid">Google Hybrid</option>
+          <option value="gMutant">Google Mutant</option>
+          <option value="gTerrain">Google Terrain</option>
+          <option value="bing">Bing Aerial</option>
+          <option value="mapboxSat">Mapbox Satellite</option>
+          <option value="sentinel">Sentinel‑2 Recent</option>
+          <option value="osmHot">OSM Humanitarian</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="layerList" class="space-y-2"></div>
+
+    <details class="mt-3">
+      <summary class="font-medium cursor-pointer">Exemple de backend (Node.js + PostGIS)</summary>
+      <pre>
+// server.js (express + pg + postgis minimal)
+// Voir README dans le serveur d'exemple fourni.
+      </pre>
+    </details>
+  </div>
+
+  <!-- Panneau attributs -->
+  <div id="attributePanel" class="panel hidden" style="bottom:12px; left:12px; right:12px; height:260px; overflow:auto;">
+    <div class="flex items-center justify-between mb-2">
+      <h3 class="font-semibold">Table attributaire</h3>
+      <div>
+        <button id="closeAttr" class="px-2 py-1 rounded bg-gray-200">Fermer</button>
+      </div>
+    </div>
+    <div id="attrContent" style="overflow:auto; height:200px;">
+      <table id="attrTable" class="w-full text-sm table-auto border-collapse">
+        <thead id="attrHead"></thead>
+        <tbody id="attrBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Librairies -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/shpjs@latest/dist/shp.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/togeojson@0.16.0/dist/togeojson.min.js"></script>
+  <script src="https://unpkg.com/dxf-parser@1.2.0/dist/dxf-parser.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+
+  <script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const $ = id => document.getElementById(id);
+
+    const adminToggle = $('adminToggle');
+    const adminPanel = $('adminPanel');
+    const loginBtn = $('loginBtn');
+    const logoutBtn = $('logoutBtn');
+    const adminUser = $('adminUser');
+    const adminPass = $('adminPass');
+    const adminTools = $('adminTools');
+    const layerPanel = $('layerPanel');
+    const layerList = $('layerList');
+    const attributePanel = $('attributePanel');
+    const closeAttr = $('closeAttr');
+    const attrHead = $('attrHead');
+    const attrBody = $('attrBody');
+    const useMock = $('useMock');
+
+    const geojsonBtn = $('geojsonBtn');
+    const geojsonInput = $('geojsonInput');
+    const shpBtn = $('shpBtn');
+    const shpZipInput = $('shpZipInput');
+    const kmlBtn = $('kmlBtn');
+    const kmlInput = $('kmlInput');
+    const gpxBtn = $('gpxBtn');
+    const gpxInput = $('gpxInput');
+    const dxfBtn = $('dxfBtn');
+    const dxfInput = $('dxfInput');
+
+    const clearLayersBtn = $('clearLayersBtn');
+    const saveBtn = $('saveBtn');
+    const pushBtn = $('pushBtn');
+    const shareBtn = $('shareBtn');
+    const backendUrl = $('backendUrl');
+    const basemapSelect = $('basemapSelect');
+    const measureBtn = $('measureBtn');
+    const drawBtn = $('drawBtn');
+
+    let measureMode = false;
+    let token = null;
+    let adminLogged = false;
+    const importedLayers = [];
+
+    const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 22, attribution: '© OpenStreetMap' });
+    const osmHot = L.tileLayer('https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OSM contributors, Humanitarian' });
+    const gSat = L.tileLayer('https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}&key=YOUR_GOOGLE_API_KEY', { maxZoom: 22, attribution: '© Google' });
+    const mapboxSat = L.tileLayer('https://api.mapbox.com/styles/v1/mapbox/satellite-v9/tiles/{z}/{x}/{y}?access_token=YOUR_MAPBOX_TOKEN', { maxZoom: 22, attribution: '© Mapbox' });
+
+    const map = L.map('map', { layers: [osm], maxZoom: 22 }).setView([48.8566, 2.3522], 12);
+
+    if (basemapSelect) {
+      basemapSelect.addEventListener('change', function () {
+        const v = basemapSelect.value;
+        [osm, osmHot, gSat, mapboxSat].forEach(l => map.removeLayer(l));
+        if (v === 'osm') map.addLayer(osm);
+        else if (v === 'osmHot') map.addLayer(osmHot);
+        else if (v === 'gSat') map.addLayer(gSat);
+        else if (v === 'mapboxSat') map.addLayer(mapboxSat);
+      });
+    }
+
+    const drawnItems = new L.FeatureGroup();
+    map.addLayer(drawnItems);
+    if (L.Control && L.Control.Draw) {
+      const drawControl = new L.Control.Draw({ edit: { featureGroup: drawnItems } });
+      map.addControl(drawControl);
+      map.on(L.Draw.Event.CREATED, function (e) { drawnItems.addLayer(e.layer); });
+    }
+
+    map.on('click', function (e) { const { lat, lng } = e.latlng; L.popup().setLatLng([lat, lng]).setContent(`Point : ${lat.toFixed(5)}, ${lng.toFixed(5)}`).openOn(map); });
+
+    if (adminToggle && adminPanel) adminToggle.addEventListener('click', () => adminPanel.classList.toggle('hidden'));
+    if (closeAttr && attributePanel) closeAttr.addEventListener('click', () => attributePanel.classList.add('hidden'));
+
+    // MOCK backend (local) - used when `useMock` is checked or when fetch fails
+    const mockStore = { layers: [], share: {} };
+    async function mockLogin(body){ return { token: 'mock-token' }; }
+    async function mockGetLayers(){ return mockStore.layers; }
+    async function mockPostLayers(body){
+      const saved = body.layers || [];
+      saved.forEach(l => { const id = Date.now() + Math.floor(Math.random()*1000); mockStore.layers.push({ id, name: l.name, geojson: l.geojson }); });
+      return { ok:true, saved: saved.length };
+    }
+    async function mockShare(body){ const id = Date.now(); mockStore.share[id]=body.layers; return { ok:true, id }; }
+
+    // safeFetch tries network first unless useMock.checked
+    async function safeFetchWithFallback(path, opts={}){
+      const base = backendUrl && backendUrl.value ? backendUrl.value.replace(/\/+$/,'') : '';
+      const url = base + path;
+
+      // if user explicitly wants mock, use it
+      if (useMock && useMock.checked) {
+        return await handleMock(path, opts);
+      }
+
+      try {
+        const res = await fetch(url, opts);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return await res.json();
+      } catch (err) {
+        console.warn('Network fetch failed, switching to mock. Error:', err);
+        // offer fallback to mock silently and keep app usable
+        alert('Impossible de joindre le backend. L\'application passe en mode local (mock). Vérifie l\'URL du backend et CORS si nécessaire.');
+        if (useMock) useMock.checked = true;
+        return await handleMock(path, opts);
+      }
+    }
+
+    async function handleMock(path, opts){
+      // basic router for our mock endpoints
+      if (path.endsWith('/login')){
+        const body = opts && opts.body ? JSON.parse(opts.body) : {};
+        return await mockLogin(body);
+      }
+      if (path.endsWith('/layers') && opts.method === 'GET'){
+        return await mockGetLayers();
+      }
+      if (path.endsWith('/layers') && (opts.method === 'POST' || opts.method === undefined)){
+        const body = opts && opts.body ? JSON.parse(opts.body) : {};
+        return await mockPostLayers(body);
+      }
+      if (path.endsWith('/share')){
+        const body = opts && opts.body ? JSON.parse(opts.body) : {};
+        return await mockShare(body);
+      }
+      throw new Error('Mock: endpoint non pris en charge: ' + path);
+    }
+
+    // Auth via backend (login)
+    if (loginBtn) loginBtn.addEventListener('click', async () => {
+      if (!backendUrl) return alert('Backend URL non défini');
+      const path = '/login';
+      try {
+        const body = { user: adminUser.value, pass: adminPass.value };
+        const res = await safeFetchWithFallback(path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+        token = res.token || null;
+        adminLogged = !!token;
+        if (adminLogged) {
+          adminTools.classList.remove('hidden');
+          layerPanel.classList.remove('hidden');
+          loginBtn.classList.add('hidden');
+          logoutBtn.classList.remove('hidden');
+          adminPanel.classList.add('hidden');
+          await loadServerLayers().catch(()=>{});
+        } else alert('Authentification échouée');
+      } catch (e){ console.error('login error', e); }
+    });
+
+    if (logoutBtn) logoutBtn.addEventListener('click', () => {
+      token = null; adminLogged = false; adminTools.classList.add('hidden'); layerPanel.classList.add('hidden'); loginBtn.classList.remove('hidden'); logoutBtn.classList.add('hidden');
+    });
+
+    function addLayerToMap(geojson, name, id){
+      try{
+        const layer = L.geoJSON(geojson, { onEachFeature: function(feature, lyr){ if(feature.properties){ let content = '<div class="small"><b>Attributs :</b><br>'; for(const key in feature.properties) content += `${key} : ${feature.properties[key]}<br>`; content += '</div>'; lyr.bindPopup(content); } } }).addTo(map);
+        if(layer.setStyle) layer.setStyle({ color: randomColor(), weight: 2 });
+        const item = { layer, name, id };
+        importedLayers.push(item);
+        renderLayerItem(importedLayers.length-1);
+        try{ map.fitBounds(layer.getBounds()); }catch(e){}
+      }catch(e){ console.error('addLayerToMap', e); alert('Erreur ajout couche'); }
+    }
+
+    function randomColor(){ return '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6,'0'); }
+
+    function renderLayerItem(index){
+      const item = importedLayers[index]; if(!item) return;
+      const entry = document.createElement('div'); entry.className='flex items-center gap-2';
+      const cb = document.createElement('input'); cb.type='checkbox'; cb.checked=true; cb.dataset.i = index;
+      const nameInput = document.createElement('input'); nameInput.value = item.name || ''; nameInput.className='flex-1 border rounded px-2 py-1';
+      const zoomBtn = document.createElement('button'); zoomBtn.textContent='🔍'; zoomBtn.title='Zoom'; zoomBtn.className='px-2';
+      const attrBtn = document.createElement('button'); attrBtn.textContent='🔎'; attrBtn.title='Attributs'; attrBtn.className='px-2';
+      const saveEditBtn = document.createElement('button'); saveEditBtn.textContent='💾'; saveEditBtn.title='Enregistrer'; saveEditBtn.className='px-2 text-green-600';
+      const delBtn = document.createElement('button'); delBtn.textContent='✖'; delBtn.title='Supprimer'; delBtn.className='px-2 text-red-600';
+
+      entry.appendChild(cb); entry.appendChild(nameInput); entry.appendChild(zoomBtn); entry.appendChild(attrBtn); entry.appendChild(saveEditBtn); entry.appendChild(delBtn);
+      layerList.appendChild(entry);
+
+      cb.addEventListener('change', function(e){ const i = parseInt(e.target.dataset.i,10); if(!importedLayers[i]) return; if(e.target.checked) map.addLayer(importedLayers[i].layer); else map.removeLayer(importedLayers[i].layer); });
+      nameInput.addEventListener('change', function(e){ importedLayers[index].name = e.target.value; });
+      zoomBtn.addEventListener('click', function(){ try{ map.fitBounds(importedLayers[index].layer.getBounds()); }catch(e){ alert('Impossible de zoomer sur cette couche'); } });
+
+      attrBtn.addEventListener('click', function(){ try{ const lyr = importedLayers[index] && importedLayers[index].layer; if(!lyr){ alert('Couche introuvable'); return;} const gj = lyr.toGeoJSON ? lyr.toGeoJSON() : null; if(!gj || !gj.features || gj.features.length===0){ alert("Cette couche n'a pas de géométries/attributs"); return;} const keys = Object.keys(gj.features[0].properties || {}); attrHead.innerHTML=''; attrBody.innerHTML=''; const headRow = document.createElement('tr'); keys.forEach(k=>{ const th = document.createElement('th'); th.className='border px-2 py-1 text-left'; th.textContent = k; headRow.appendChild(th); }); attrHead.appendChild(headRow); gj.features.forEach(f=>{ const tr = document.createElement('tr'); keys.forEach(k=>{ const td = document.createElement('td'); td.className='border px-2 py-1'; td.textContent = f.properties ? (f.properties[k] !== undefined ? f.properties[k] : '') : ''; tr.appendChild(td); }); attrBody.appendChild(tr); }); attributePanel.classList.remove('hidden'); }catch(e){ console.error(e); alert('Erreur affichage attributs'); } });
+
+      delBtn.addEventListener('click', function(){ if(!adminLogged){ alert("Accès réservé à l'administrateur"); return;} try{ map.removeLayer(importedLayers[index].layer);}catch(e){} importedLayers[index]=null; entry.remove(); });
+
+      saveEditBtn.addEventListener('click', async function(){ if(!adminLogged){ alert("Accès réservé à l'administrateur"); return;} const gj = importedLayers[index].layer.toGeoJSON(); const path = '/layers'; try{ const res = await safeFetchWithFallback(path, { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+token}, body: JSON.stringify({ layers:[{ name: importedLayers[index].name, geojson: gj }] }) }); alert('Layer envoyé'); }catch(e){ console.error(e); alert('Erreur envoi'); } });
+    }
+
+    function handleFile(file){ /* unchanged: same as before */
+      const name = file.name.toLowerCase();
+      if (name.endsWith('.zip')){
+        const reader = new FileReader();
+        reader.onload = function(evt){ window.shp(evt.target.result).then(function(geo){ if (geo.type==='FeatureCollection') addLayerToMap(geo, file.name.replace('.zip','')); else for(const k in geo) addLayerToMap(geo[k], `${file.name} - ${k}`); }).catch(err=>{console.error(err); alert('Erreur traitement SHP');}); };
+        reader.readAsArrayBuffer(file); return;
+      }
+      if (name.endsWith('.geojson')||name.endsWith('.json')){ const reader=new FileReader(); reader.onload=function(evt){ try{ const gj=JSON.parse(evt.target.result); addLayerToMap(gj,file.name);}catch(e){alert('GeoJSON invalide');}}; reader.readAsText(file); return; }
+      if (name.endsWith('.kml')||name.endsWith('.gpx')){ const reader=new FileReader(); reader.onload=function(evt){ try{ const parser=new DOMParser(); const xml=parser.parseFromString(evt.target.result,'text/xml'); const geo = name.endsWith('.kml') ? toGeoJSON.kml(xml) : toGeoJSON.gpx(xml); addLayerToMap(geo,file.name);}catch(e){console.error(e); alert('Erreur KML/GPX');}}; reader.readAsText(file); return; }
+      if (name.endsWith('.dxf')){ const reader=new FileReader(); reader.onload=function(evt){ try{ const parser=new window.DxfParser(); const dxf = parser.parseSync(evt.target.result); const features=[]; (dxf.entities||[]).forEach(ent=>{ if(ent.type==='LINE'){ features.push({type:'Feature',geometry:{type:'LineString',coordinates:[[ent.start.x,ent.start.y],[ent.end.x,ent.end.y]]},properties:{}}); } else if(ent.type==='POINT'){ features.push({type:'Feature',geometry:{type:'Point',coordinates:[ent.position.x,ent.position.y]},properties:{}}); } else if(ent.type==='LWPOLYLINE'||ent.type==='POLYLINE'){ const coords=(ent.vertices||[]).map(v=>[v.x,v.y]); features.push({type:'Feature',geometry:{type:'LineString',coordinates:coords},properties:{}}); } }); addLayerToMap({type:'FeatureCollection',features},file.name);}catch(e){console.error(e); alert('Erreur parsing DXF');}}; reader.readAsText(file); return; }
+      alert('Format non reconnu');
+    }
+
+    geojsonBtn && geojsonBtn.addEventListener('click', ()=>geojsonInput && geojsonInput.click()); shpBtn && shpBtn.addEventListener('click', ()=>shpZipInput && shpZipInput.click()); kmlBtn && kmlBtn.addEventListener('click', ()=>kmlInput && kmlInput.click()); gpxBtn && gpxBtn.addEventListener('click', ()=>gpxInput && gpxInput.click()); dxfBtn && dxfBtn.addEventListener('click', ()=>dxfInput && dxfInput.click());
+    [geojsonInput,shpZipInput,kmlInput,gpxInput,dxfInput].forEach(inp=>{ if(!inp) return; inp.addEventListener('change', function(e){ const f = e.target.files[0]; if(f) handleFile(f); e.target.value=''; }); });
+
+    try{ ['dragenter','dragover'].forEach(ev=>map.getContainer().addEventListener(ev,e=>{ e.preventDefault(); e.dataTransfer.dropEffect='copy'; })); map.getContainer().addEventListener('drop', function(e){ e.preventDefault(); const file = e.dataTransfer.files[0]; if(file) handleFile(file); }); }catch(e){}
+
+    measureBtn && measureBtn.addEventListener('click', function(){ let pts=[]; let line=null; measureBtn.classList.toggle('bg-indigo-400'); if(!measureMode){ measureMode=true; alert('Mode mesure activé : cliquez pour ajouter points, double-clic pour terminer'); function onClick(e){ pts.push([e.latlng.lat,e.latlng.lng]); if(line) map.removeLayer(line); line=L.polyline(pts,{color:'blue'}).addTo(map); } function onDbl(){ let len=0; for(let i=1;i<pts.length;i++) len += map.distance(L.latLng(pts[i-1]), L.latLng(pts[i])); alert('Distance totale : '+(len/1000).toFixed(3)+' km'); map.off('click',onClick); map.off('dblclick',onDbl); measureMode=false; measureBtn.classList.remove('bg-indigo-400'); } map.on('click',onClick); map.on('dblclick',onDbl); } else { measureMode=false; measureBtn.classList.remove('bg-indigo-400'); pts=[]; if(line) map.removeLayer(line); } });
+
+    let drawActive=false; drawBtn && drawBtn.addEventListener('click', function(){ drawActive = !drawActive; drawBtn.classList.toggle('bg-indigo-300'); if(drawActive) alert('Outil dessin activé. Utilise la barre à gauche pour dessiner/éditer.'); });
+
+    clearLayersBtn && clearLayersBtn.addEventListener('click', function(){ if(!adminLogged){ alert("Accès réservé à l'administrateur"); return; } importedLayers.forEach(it=>{ if(it&&it.layer) try{ map.removeLayer(it.layer);}catch(e){} }); importedLayers.length=0; while(layerList.firstChild) layerList.removeChild(layerList.firstChild); });
+
+    saveBtn && saveBtn.addEventListener('click', function(){ if(!adminLogged){ alert("Accès réservé à l'administrateur"); return; } try{ const data = importedLayers.map(it=>{ if(!it) return null; const gj = it.layer.toGeoJSON ? it.layer.toGeoJSON() : null; return gj ? { name: it.name, geojson: gj } : null; }).filter(Boolean); localStorage.setItem('ceca_co_layers', JSON.stringify(data)); alert('Couches sauvegardées localement.'); }catch(e){ alert('Erreur sauvegarde'); } });
+
+    pushBtn && pushBtn.addEventListener('click', async function(){ if(!adminLogged){ alert("Accès réservé à l'administrateur"); return; } const path = '/layers'; const payload = importedLayers.map(it=>{ if(!it) return null; const gj = it.layer.toGeoJSON ? it.layer.toGeoJSON() : null; return gj ? { name: it.name, geojson: gj } : null; }).filter(Boolean); try{ const res = await safeFetchWithFallback(path, { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+token}, body: JSON.stringify({ layers: payload }) }); alert('Couches envoyées au serveur'); }catch(e){ console.error(e); alert('Erreur envoi serveur'); } });
+
+    shareBtn && shareBtn.addEventListener('click', async function(){ if(!adminLogged){ alert("Accès réservé à l'administrateur"); return; } const path = '/share'; const payload = importedLayers.map(it=>{ if(!it) return null; const gj = it.layer.toGeoJSON ? it.layer.toGeoJSON() : null; return gj ? { name: it.name, geojson: gj } : null; }).filter(Boolean); try{ const res = await safeFetchWithFallback(path, { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+token}, body: JSON.stringify({ layers: payload }) }); const id = res.id; if(!id) throw new Error('No id'); const link = window.location.origin + window.location.pathname + '?share=' + id; prompt('Lien public (copier) :', link); }catch(e){ console.error(e); alert('Erreur partage'); } });
+
+    async function loadServerLayers(){ if(!backendUrl) return; const path = '/layers'; try{ const arr = await safeFetchWithFallback(path, { headers: token ? { 'Authorization':'Bearer '+token } : {} }); (arr||[]).forEach(r=>{ try{ const geo = typeof r.geojson === 'string' ? JSON.parse(r.geojson) : r.geojson; addLayerToMap(geo, r.name || ('layer-'+r.id), r.id); }catch(e){ console.error(e); } }); }catch(e){ console.error('loadServerLayers error', e); }
+    }
+
+    try{ const saved = localStorage.getItem('ceca_co_layers'); if(saved){ const arr = JSON.parse(saved); arr.forEach(a => addLayerToMap(a.geojson, a.name)); } }catch(e){}
+
+  });
+  </script>
+</body>
+</html>
